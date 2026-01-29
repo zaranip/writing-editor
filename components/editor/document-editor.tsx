@@ -41,6 +41,7 @@ export function DocumentEditor({
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
 
   const editor = useEditor({
+    immediatelyRender: false, // Prevent SSR hydration mismatch
     extensions: [
       StarterKit,
       Underline,

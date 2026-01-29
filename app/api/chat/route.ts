@@ -3,12 +3,10 @@ import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { decrypt } from "@/lib/crypto";
 import { getModel } from "@/lib/ai/provider";
-import { retrieveContext, formatContext } from "@/lib/ai/rag";
+import { retrieveContext, formatContext, getSourcesSummary } from "@/lib/ai/rag";
 import { buildContextPrompt } from "@/lib/ai/prompts";
-import { searchWeb, scrapeUrl } from "@/lib/search/web-search";
-import { chunkText } from "@/lib/ingest/chunker";
-import { generateEmbeddings } from "@/lib/ai/embeddings";
-import type { LLMProvider } from "@/types";
+import { searchWeb, scrapeUrl, scrapeUrlWithImages } from "@/lib/search/web-search";
+import type { LLMProvider, RetrievedChunk } from "@/types";
 
 export const maxDuration = 120;
 
@@ -72,6 +70,7 @@ export async function POST(req: Request) {
     .pop();
 
   let systemPrompt = buildContextPrompt("No sources uploaded yet.");
+  let retrievedChunks: RetrievedChunk[] = [];
 
   if (lastUserMessage) {
     try {
@@ -81,19 +80,22 @@ export async function POST(req: Request) {
         .join(" ") || "";
 
       if (queryText && openaiKey) {
-        const chunks = await retrieveContext(
+        retrievedChunks = await retrieveContext(
           queryText,
           projectId,
           user.id,
           openaiKey
         );
-        const context = formatContext(chunks);
+        const context = formatContext(retrievedChunks);
         systemPrompt = buildContextPrompt(context);
       }
     } catch (error) {
       console.error("RAG retrieval failed:", error);
     }
   }
+
+  // Get sources summary for metadata
+  const sourcesUsed = getSourcesSummary(retrievedChunks);
 
   // Stream the response with web research tools
   const result = streamText({
@@ -142,19 +144,70 @@ export async function POST(req: Request) {
       }),
       addToSources: tool({
         description:
-          "Save a web page as a source in the user's project. Use this when you've found a useful web page that the user would want to keep as a research source. The page will be scraped, chunked, and made searchable via RAG.",
+          "Save a web page as a source in the user's project. Use this when you've found a useful web page that the user would want to keep as a research source. The page content and featured images will be saved for document generation.",
         inputSchema: z.object({
           url: z.string().describe("The URL of the source to add"),
           title: z.string().describe("A descriptive title for the source"),
         }),
         execute: async ({ url, title }) => {
+          let sourceId: string | null = null;
+          
           try {
-            const { content } = await scrapeUrl(url);
+            // Scrape URL for content and featured images
+            const { content, description, featuredImages } = await scrapeUrlWithImages(url);
 
             if (!content || content.trim().length === 0) {
               return { success: false, message: "No content could be extracted from this URL." };
             }
 
+            // Generate unique prefix for this source's files
+            const timestamp = Date.now();
+            const safeTitle = title.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 50);
+            const filePrefix = `${projectId}/${timestamp}-${safeTitle}`;
+
+            // Save text content to a .txt file in storage
+            const textContent = `# ${title}\n\nSource: ${url}\n\n${description ? `## Summary\n${description}\n\n` : ""}## Content\n\n${content}`;
+            const textBlob = new Blob([textContent], { type: "text/plain" });
+            const textPath = `${filePrefix}/content.txt`;
+            
+            const { error: textUploadError } = await supabase.storage
+              .from("sources")
+              .upload(textPath, textBlob, { contentType: "text/plain" });
+
+            if (textUploadError) {
+              throw new Error(`Failed to save content: ${textUploadError.message}`);
+            }
+
+            // Download and save featured images (up to 3)
+            const savedImagePaths: string[] = [];
+            for (let i = 0; i < Math.min(featuredImages.length, 3); i++) {
+              const imageUrl = featuredImages[i];
+              try {
+                const imgResponse = await fetch(imageUrl, {
+                  headers: { "User-Agent": "Mozilla/5.0 (compatible; WritingEditor/1.0)" },
+                  signal: AbortSignal.timeout(10000),
+                });
+                
+                if (imgResponse.ok) {
+                  const contentType = imgResponse.headers.get("content-type") || "image/jpeg";
+                  const ext = contentType.includes("png") ? "png" : contentType.includes("gif") ? "gif" : contentType.includes("webp") ? "webp" : "jpg";
+                  const imgPath = `${filePrefix}/image-${i + 1}.${ext}`;
+                  
+                  const imgBlob = await imgResponse.blob();
+                  const { error: imgUploadError } = await supabase.storage
+                    .from("sources")
+                    .upload(imgPath, imgBlob, { contentType });
+                  
+                  if (!imgUploadError) {
+                    savedImagePaths.push(imgPath);
+                  }
+                }
+              } catch {
+                // Skip failed image downloads
+              }
+            }
+
+            // Create source record
             const { data: source, error: insertError } = await supabase
               .from("sources")
               .insert({
@@ -163,66 +216,45 @@ export async function POST(req: Request) {
                 type: "url",
                 title,
                 original_url: url,
-                content,
-                status: "processing",
-                metadata: { auto_added: true },
+                file_path: textPath,
+                content: description || content.slice(0, 500), // Store summary/preview
+                status: "ready",
+                metadata: { 
+                  auto_added: true,
+                  image_paths: savedImagePaths,
+                  scraped_at: new Date().toISOString(),
+                },
               })
               .select()
               .single();
 
             if (insertError || !source) {
+              // Clean up uploaded files if DB insert fails
+              await supabase.storage.from("sources").remove([textPath, ...savedImagePaths]);
               return { success: false, message: `Failed to create source: ${insertError?.message}` };
             }
-
-            const chunks = chunkText(content);
-
-            if (openaiKey) {
-              try {
-                const embeddings = await generateEmbeddings(chunks, openaiKey);
-                const chunkRecords = chunks.map((chunkContent, index) => ({
-                  source_id: source.id,
-                  project_id: projectId,
-                  user_id: user!.id,
-                  content: chunkContent,
-                  chunk_index: index,
-                  embedding: JSON.stringify(embeddings[index]),
-                }));
-                await supabase.from("chunks").insert(chunkRecords);
-              } catch {
-                const chunkRecords = chunks.map((chunkContent, index) => ({
-                  source_id: source.id,
-                  project_id: projectId,
-                  user_id: user!.id,
-                  content: chunkContent,
-                  chunk_index: index,
-                }));
-                await supabase.from("chunks").insert(chunkRecords);
-              }
-            } else {
-              const chunkRecords = chunks.map((chunkContent, index) => ({
-                source_id: source.id,
-                project_id: projectId,
-                user_id: user!.id,
-                content: chunkContent,
-                chunk_index: index,
-              }));
-              await supabase.from("chunks").insert(chunkRecords);
-            }
-
-            await supabase
-              .from("sources")
-              .update({ status: "ready" })
-              .eq("id", source.id);
+            
+            sourceId = source.id;
 
             return {
               success: true,
-              message: `Added "${title}" to sources (${chunks.length} chunks indexed).`,
+              message: `Added "${title}" to sources${savedImagePaths.length > 0 ? ` with ${savedImagePaths.length} image(s)` : ""}.`,
               sourceId: source.id,
             };
           } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : "Unknown error";
+            
+            // Update source status to error if it was created
+            if (sourceId) {
+              await supabase
+                .from("sources")
+                .update({ status: "error", error_message: errorMessage })
+                .eq("id", sourceId);
+            }
+            
             return {
               success: false,
-              message: `Failed to add source: ${error instanceof Error ? error.message : "Unknown error"}`,
+              message: `Failed to add source: ${errorMessage}`,
             };
           }
         },
@@ -232,36 +264,17 @@ export async function POST(req: Request) {
 
   return result.toUIMessageStreamResponse({
     originalMessages: messages,
+    messageMetadata: ({ part }) => {
+      // Send sourcesUsed at the start of the message stream
+      if (part.type === "start") {
+        return { sourcesUsed };
+      }
+    },
     onFinish: async ({ messages: allMessages }) => {
-      // Persist messages to the database for chat history
+      if (!chatId) return; // Client must create session first
+
       try {
-        // Determine the chat session ID
-        let sessionId = chatId;
-
-        if (!sessionId) {
-          // Create a new chat session
-          const firstUserMsg = allMessages.find((m) => m.role === "user");
-          const title = firstUserMsg
-            ? extractTextFromParts(firstUserMsg)?.slice(0, 100) || "New Chat"
-            : "New Chat";
-
-          const { data: session } = await supabase
-            .from("chat_sessions")
-            .insert({
-              project_id: projectId,
-              user_id: user!.id,
-              title,
-            })
-            .select()
-            .single();
-
-          sessionId = session?.id;
-        }
-
-        if (!sessionId) return;
-
         // Save only the last user message and the last assistant response
-        // (previous messages are already saved from earlier calls)
         const lastUserIdx = allMessages.length >= 2 ? allMessages.length - 2 : -1;
         const lastAssistantIdx = allMessages.length >= 1 ? allMessages.length - 1 : -1;
 
@@ -276,23 +289,26 @@ export async function POST(req: Request) {
 
         if (lastUserIdx >= 0 && allMessages[lastUserIdx].role === "user") {
           toSave.push({
-            chat_session_id: sessionId,
+            chat_session_id: chatId,
             project_id: projectId,
             user_id: user!.id,
             role: "user",
             content: extractTextFromParts(allMessages[lastUserIdx]) || "",
-            metadata: {},
+            metadata: { parts: allMessages[lastUserIdx].parts },
           });
         }
 
         if (lastAssistantIdx >= 0 && allMessages[lastAssistantIdx].role === "assistant") {
           toSave.push({
-            chat_session_id: sessionId,
+            chat_session_id: chatId,
             project_id: projectId,
             user_id: user!.id,
             role: "assistant",
             content: extractTextFromParts(allMessages[lastAssistantIdx]) || "",
-            metadata: {},
+            metadata: {
+              parts: allMessages[lastAssistantIdx].parts,
+              sourcesUsed, // Include which sources were used for RAG
+            },
           });
         }
 
@@ -300,14 +316,11 @@ export async function POST(req: Request) {
           await supabase.from("chat_messages").insert(toSave);
         }
 
-        // Update session title if it's the first exchange
-        if (!chatId) {
-          const userText = extractTextFromParts(allMessages.find((m) => m.role === "user")!) || "New Chat";
-          await supabase
-            .from("chat_sessions")
-            .update({ title: userText.slice(0, 100) })
-            .eq("id", sessionId);
-        }
+        // Update session updated_at
+        await supabase
+          .from("chat_sessions")
+          .update({ updated_at: new Date().toISOString() })
+          .eq("id", chatId);
       } catch (error) {
         console.error("Failed to save chat messages:", error);
       }

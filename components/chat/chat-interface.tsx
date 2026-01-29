@@ -13,6 +13,13 @@ import { Send, AlertCircle, Plus } from "lucide-react";
 import { MODEL_OPTIONS, type LLMProvider } from "@/types";
 import Link from "next/link";
 
+// Metadata type for messages with sources used (matches server-side)
+interface MessageMetadata {
+  sourcesUsed?: { id: string; title: string }[];
+}
+
+type ChatMessage = UIMessage<MessageMetadata>;
+
 interface ChatSession {
   id: string;
   title: string;
@@ -25,10 +32,12 @@ interface ChatInterfaceProps {
   availableProviders: string[];
   hasSources: boolean;
   chatId?: string;
-  initialMessages?: UIMessage[];
+  initialMessages?: ChatMessage[];
   chatSessions?: ChatSession[];
   onChatChange?: (chatId: string) => void;
   onNewChat?: () => void;
+  onSessionCreated?: (session: { id: string; title: string }) => void;
+  onSourceAdded?: () => void;
 }
 
 export function ChatInterface({
@@ -40,6 +49,8 @@ export function ChatInterface({
   chatSessions = [],
   onChatChange,
   onNewChat,
+  onSessionCreated,
+  onSourceAdded,
 }: ChatInterfaceProps) {
   const defaultModel = MODEL_OPTIONS.find((m) =>
     availableProviders.includes(m.provider)
@@ -52,6 +63,13 @@ export function ChatInterface({
     defaultModel?.model ?? "gpt-4o"
   );
   const [inputValue, setInputValue] = useState("");
+  const [currentChatId, setCurrentChatId] = useState<string | undefined>(chatId);
+  const [pendingMessage, setPendingMessage] = useState<string | null>(null);
+
+  // Sync currentChatId from prop
+  useEffect(() => {
+    setCurrentChatId(chatId);
+  }, [chatId]);
 
   const transport = useMemo(
     () =>
@@ -61,33 +79,92 @@ export function ChatInterface({
           projectId,
           provider: selectedProvider,
           model: selectedModel,
-          chatId,
+          chatId: currentChatId,
         },
       }),
-    [projectId, selectedProvider, selectedModel, chatId]
+    [projectId, selectedProvider, selectedModel, currentChatId]
   );
 
-  const { messages, status, sendMessage, error, setMessages } = useChat({
-    id: chatId,
+  const { messages, status, sendMessage, error, setMessages } = useChat<ChatMessage>({
+    id: currentChatId,
     transport,
     messages: initialMessages,
-    onFinish: useCallback(() => {
-      // The server handles persisting messages via onFinish in the route
-    }, []),
+    onFinish: useCallback(({ message }: { message: ChatMessage }) => {
+      // Check if the assistant used the addToSources tool successfully
+      if (onSourceAdded && message.parts) {
+        const hasAddedSource = message.parts.some((part) => {
+          // AI SDK v6: static tools have type "tool-{name}", dynamic tools have type "dynamic-tool"
+          const isAddToSourcesTool = 
+            part.type === "tool-addToSources" || 
+            (part.type === "dynamic-tool" && (part as { toolName?: string }).toolName === "addToSources");
+          
+          if (isAddToSourcesTool) {
+            const toolPart = part as { state: string; output?: unknown };
+            return (
+              toolPart.state === "output-available" &&
+              (toolPart.output as { success?: boolean })?.success === true
+            );
+          }
+          return false;
+        });
+        if (hasAddedSource) {
+          onSourceAdded();
+        }
+      }
+    }, [onSourceAdded]),
   });
 
-  // Reset messages when chatId changes and initialMessages are provided
+  // Reset messages when chatId or initialMessages change
   useEffect(() => {
     if (initialMessages) {
       setMessages(initialMessages);
+    } else {
+      setMessages([]);
     }
-  }, [chatId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [chatId, initialMessages, setMessages]);
+
+  // Send pending message once transport is ready with the new chatId
+  useEffect(() => {
+    if (pendingMessage && currentChatId) {
+      sendMessage({ text: pendingMessage });
+      setPendingMessage(null);
+    }
+  }, [pendingMessage, currentChatId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isLoading = status === "streaming" || status === "submitted";
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!inputValue.trim() || isLoading) return;
+
+    if (!currentChatId) {
+      // Create a new session before sending the first message
+      try {
+        const res = await fetch("/api/chat-sessions", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            projectId,
+            title: inputValue.trim().slice(0, 100),
+          }),
+        });
+        if (!res.ok) {
+          const errorBody = await res.text().catch(() => "No response body");
+          console.error(`Chat session creation failed: ${res.status} ${res.statusText}`, errorBody);
+          throw new Error(`Failed to create chat session: ${res.status}`);
+        }
+        const session = await res.json();
+        onSessionCreated?.(session);
+        setCurrentChatId(session.id);
+        setPendingMessage(inputValue);
+        setInputValue("");
+      } catch (err) {
+        console.error("Failed to create chat session:", err);
+      }
+      return;
+    }
+
     sendMessage({ text: inputValue });
     setInputValue("");
   }
@@ -139,7 +216,7 @@ export function ChatInterface({
               key={session.id}
               onClick={() => onChatChange?.(session.id)}
               className={`shrink-0 rounded-md border px-3 py-1.5 text-xs transition-colors ${
-                session.id === chatId
+                session.id === currentChatId
                   ? "border-primary bg-primary/10 text-primary font-medium"
                   : "border-border hover:bg-muted text-muted-foreground"
               }`}

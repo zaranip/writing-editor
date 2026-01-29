@@ -141,4 +141,5 @@ export interface RetrievedChunk {
   chunk_index: number;
   metadata: Record<string, unknown>;
   similarity: number;
+  source_title?: string;
 }

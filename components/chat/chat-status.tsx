@@ -8,10 +8,24 @@ interface ChatStatusProps {
   messages: UIMessage[];
 }
 
-interface ToolInvocation {
+// AI SDK v6: static tools have type "tool-{name}", dynamic tools have type "dynamic-tool"
+interface ToolInfo {
   toolName: string;
-  args: Record<string, unknown>;
+  input?: Record<string, unknown>;
   state: string;
+}
+
+// Helper to check if a part is a tool invocation
+function isToolPart(part: { type: string }): boolean {
+  return part.type.startsWith("tool-") || part.type === "dynamic-tool";
+}
+
+// Extract tool name from part
+function getToolName(part: { type: string; toolName?: string }): string {
+  if (part.type === "dynamic-tool") {
+    return part.toolName || "unknown";
+  }
+  return part.type.replace(/^tool-/, "");
 }
 
 /**
@@ -59,19 +73,27 @@ interface Step {
   done: boolean;
 }
 
-function extractActiveTools(message: UIMessage | undefined): ToolInvocation[] {
+function isToolOutputReady(state: string): boolean {
+  return state === "output-available" || state === "output-error" || state === "output-denied";
+}
+
+function extractActiveTools(message: UIMessage | undefined): ToolInfo[] {
   if (!message?.parts) return [];
-  const tools: ToolInvocation[] = [];
+  const tools: ToolInfo[] = [];
   for (const part of message.parts) {
-    if (part.type === "tool-invocation") {
-      const inv = (part as unknown as { toolInvocation: ToolInvocation }).toolInvocation;
-      if (inv) tools.push(inv);
+    if (isToolPart(part)) {
+      const toolPart = part as unknown as { type: string; toolName?: string; input: Record<string, unknown>; state: string };
+      tools.push({
+        toolName: getToolName(toolPart),
+        input: toolPart.input,
+        state: toolPart.state,
+      });
     }
   }
   return tools;
 }
 
-function buildSteps(tools: ToolInvocation[], status: string): Step[] {
+function buildSteps(tools: ToolInfo[], status: string): Step[] {
   const steps: Step[] = [];
 
   if (tools.length === 0) {
@@ -85,7 +107,7 @@ function buildSteps(tools: ToolInvocation[], status: string): Step[] {
   }
 
   for (const tool of tools) {
-    const done = tool.state === "result";
+    const done = isToolOutputReady(tool.state);
     const spinner = <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />;
     const check = <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />;
 
@@ -94,7 +116,7 @@ function buildSteps(tools: ToolInvocation[], status: string): Step[] {
         steps.push({
           icon: done ? check : spinner,
           label: done ? "Searched the web" : "Searching the web...",
-          detail: `"${String(tool.args.query || "")}"`,
+          detail: tool.input?.query ? `"${String(tool.input.query)}"` : undefined,
           done,
         });
         break;
@@ -102,7 +124,7 @@ function buildSteps(tools: ToolInvocation[], status: string): Step[] {
         steps.push({
           icon: done ? check : <BookOpen className="h-3.5 w-3.5 text-orange-500 animate-pulse" />,
           label: done ? "Read web page" : "Reading web page...",
-          detail: String(tool.args.url || "").replace(/^https?:\/\/(www\.)?/, "").split("/")[0],
+          detail: tool.input?.url ? String(tool.input.url).replace(/^https?:\/\/(www\.)?/, "").split("/")[0] : undefined,
           done,
         });
         break;
@@ -110,7 +132,7 @@ function buildSteps(tools: ToolInvocation[], status: string): Step[] {
         steps.push({
           icon: done ? check : <BookPlus className="h-3.5 w-3.5 text-emerald-500 animate-pulse" />,
           label: done ? "Added to sources" : "Adding to sources...",
-          detail: String(tool.args.title || ""),
+          detail: tool.input?.title ? String(tool.input.title) : undefined,
           done,
         });
         break;
@@ -125,7 +147,7 @@ function buildSteps(tools: ToolInvocation[], status: string): Step[] {
 
   // If the last tool is done and status is still streaming, the AI is composing its response
   const lastTool = tools[tools.length - 1];
-  if (lastTool?.state === "result" && status === "streaming") {
+  if (isToolOutputReady(lastTool?.state) && status === "streaming") {
     steps.push({
       icon: <Brain className="h-3.5 w-3.5 text-violet-500 animate-pulse" />,
       label: "Composing response...",

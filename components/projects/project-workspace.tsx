@@ -19,8 +19,16 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { createClient } from "@/lib/supabase/client";
 import type { Project, Source } from "@/types";
 import type { UIMessage } from "ai";
+
+// Metadata type for messages with sources used (matches server-side)
+interface MessageMetadata {
+  sourcesUsed?: { id: string; title: string }[];
+}
+
+type ChatMessage = UIMessage<MessageMetadata>;
 
 interface ChatSession {
   id: string;
@@ -39,22 +47,43 @@ interface ProjectWorkspaceProps {
 
 export function ProjectWorkspace({
   project,
-  sources,
+  sources: initialSources,
   apiKeys,
 }: ProjectWorkspaceProps) {
   const availableProviders = apiKeys.map((k) => k.provider);
 
+  // Sources state (allows refresh when AI adds sources)
+  const [currentSources, setCurrentSources] = useState<Source[]>(initialSources);
+
+  const refreshSources = useCallback(async () => {
+    try {
+      const supabase = createClient();
+      const { data } = await supabase
+        .from("sources")
+        .select("*")
+        .eq("project_id", project.id)
+        .order("created_at", { ascending: false });
+      if (data) {
+        setCurrentSources(data as Source[]);
+      }
+    } catch (err) {
+      console.error("Failed to refresh sources:", err);
+    }
+  }, [project.id]);
+
   // Chat session state
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | undefined>();
-  const [chatMessages, setChatMessages] = useState<UIMessage[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [loadingSessions, setLoadingSessions] = useState(true);
 
   // Fetch chat sessions on mount
   const fetchSessions = useCallback(async () => {
     try {
-      const res = await fetch(`/api/chat-sessions?projectId=${project.id}`);
+      const res = await fetch(`/api/chat-sessions?projectId=${project.id}`, {
+        credentials: "include",
+      });
       if (res.ok) {
         const data = await res.json();
         setChatSessions(data.sessions || []);
@@ -78,16 +107,28 @@ export function ProjectWorkspace({
 
   const loadSessionMessages = async (sessionId: string) => {
     try {
-      const res = await fetch(`/api/chat-sessions?sessionId=${sessionId}`);
+      const res = await fetch(`/api/chat-sessions?sessionId=${sessionId}`, {
+        credentials: "include",
+      });
       if (res.ok) {
         const data = await res.json();
-        // Convert DB messages to UIMessage format
-        const uiMessages: UIMessage[] = (data.messages || []).map(
-          (m: { id: string; role: string; content: string; created_at: string }) => ({
+        // Convert DB messages to ChatMessage format, reconstructing full parts from metadata
+        const uiMessages: ChatMessage[] = (data.messages || []).map(
+          (m: {
+            id: string;
+            role: string;
+            content: string;
+            metadata?: { parts?: UIMessage["parts"]; sourcesUsed?: { id: string; title: string }[] };
+            created_at: string;
+          }): ChatMessage => ({
             id: m.id,
             role: m.role as "user" | "assistant",
-            parts: [{ type: "text" as const, text: m.content }],
-            createdAt: new Date(m.created_at),
+            // Use saved parts from metadata if available, otherwise fall back to text
+            parts: m.metadata?.parts || [{ type: "text" as const, text: m.content }],
+            // Include sources used for assistant messages in metadata
+            metadata: m.role === "assistant" && m.metadata?.sourcesUsed 
+              ? { sourcesUsed: m.metadata.sourcesUsed } 
+              : undefined,
           })
         );
         setChatMessages(uiMessages);
@@ -107,9 +148,20 @@ export function ProjectWorkspace({
     setChatMessages([]);
   };
 
+  const handleSessionCreated = useCallback((session: { id: string; title: string }) => {
+    setChatSessions((prev) => [
+      { id: session.id, title: session.title, created_at: new Date().toISOString(), message_count: 0 },
+      ...prev,
+    ]);
+    setActiveChatId(session.id);
+  }, []);
+
   const handleDeleteSession = async (sessionId: string) => {
     try {
-      await fetch(`/api/chat-sessions?id=${sessionId}`, { method: "DELETE" });
+      await fetch(`/api/chat-sessions?id=${sessionId}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
       setChatSessions((prev) => prev.filter((s) => s.id !== sessionId));
       if (activeChatId === sessionId) {
         handleNewChat();
@@ -141,7 +193,7 @@ export function ProjectWorkspace({
                 <TabsList className="w-fit">
                   <TabsTrigger value="sources" className="gap-1.5 text-xs">
                     <Upload className="h-3.5 w-3.5" />
-                    Sources ({sources.length})
+                    Sources ({currentSources.length})
                   </TabsTrigger>
                   <TabsTrigger value="documents" className="gap-1.5 text-xs">
                     <FileText className="h-3.5 w-3.5" />
@@ -151,7 +203,7 @@ export function ProjectWorkspace({
               </div>
 
               <TabsContent value="sources" className="flex-1 overflow-y-auto p-4 mt-0">
-                <SourcePanel projectId={project.id} sources={sources} />
+                <SourcePanel projectId={project.id} sources={currentSources} onRefresh={refreshSources} />
               </TabsContent>
 
               <TabsContent value="documents" className="flex-1 overflow-hidden p-4 mt-0">
@@ -265,12 +317,14 @@ export function ProjectWorkspace({
                 <ChatInterface
                   projectId={project.id}
                   availableProviders={availableProviders}
-                  hasSources={sources.some((s) => s.status === "ready")}
+                  hasSources={currentSources.some((s: Source) => s.status === "ready")}
                   chatId={activeChatId}
                   initialMessages={chatMessages}
                   chatSessions={chatSessions}
                   onChatChange={handleChatChange}
                   onNewChat={handleNewChat}
+                  onSessionCreated={handleSessionCreated}
+                  onSourceAdded={refreshSources}
                 />
               </div>
             </div>

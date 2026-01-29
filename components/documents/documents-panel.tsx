@@ -1,9 +1,25 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { DocumentEditor } from "@/components/editor/document-editor";
-import { SlideEditor } from "@/components/editor/slide-editor";
+import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
+
+// Dynamic imports with ssr: false to prevent Tiptap SSR hydration issues
+const LoadingSpinner = () => (
+  <div className="flex h-full items-center justify-center">
+    <div className="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
+  </div>
+);
+
+const DocumentEditor = dynamic(
+  () => import("@/components/editor/document-editor").then((m) => m.DocumentEditor),
+  { ssr: false, loading: LoadingSpinner }
+);
+
+const SlideEditor = dynamic(
+  () => import("@/components/editor/slide-editor").then((m) => m.SlideEditor),
+  { ssr: false, loading: LoadingSpinner }
+);
 import {
   FileText,
   Presentation,

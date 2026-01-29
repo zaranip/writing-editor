@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import {
   FileText,
   Globe,
@@ -10,6 +11,7 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock,
+  ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -58,13 +60,64 @@ const STATUS_CONFIG: Record<string, {
   },
 };
 
+// Component to display source thumbnail
+function SourceThumbnail({ source }: { source: Source }) {
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const supabase = createClient();
+  
+  useEffect(() => {
+    // Check if source has image paths in metadata
+    const imagePaths = (source.metadata as { image_paths?: string[] })?.image_paths;
+    if (imagePaths && imagePaths.length > 0) {
+      // Get public URL for first image
+      const { data } = supabase.storage.from("sources").getPublicUrl(imagePaths[0]);
+      if (data?.publicUrl) {
+        setImageUrl(data.publicUrl);
+      }
+    }
+  }, [source.metadata, supabase.storage]);
+
+  if (imageUrl) {
+    return (
+      <div className="rounded-md overflow-hidden w-10 h-10 bg-muted flex-shrink-0">
+        <img
+          src={imageUrl}
+          alt=""
+          className="w-full h-full object-cover"
+          onError={() => setImageUrl(null)}
+        />
+      </div>
+    );
+  }
+
+  const TypeIcon = TYPE_ICONS[source.type] || FileText;
+  return (
+    <div className="rounded-md bg-muted p-2 flex-shrink-0">
+      <TypeIcon className="h-4 w-4 text-muted-foreground" />
+    </div>
+  );
+}
+
 export function SourceList({ sources, onSourceRemoved }: SourceListProps) {
   const supabase = createClient();
 
   async function handleDelete(source: Source) {
-    // Delete from storage if it has a file
+    const filesToDelete: string[] = [];
+    
+    // Add main file path
     if (source.file_path) {
-      await supabase.storage.from("sources").remove([source.file_path]);
+      filesToDelete.push(source.file_path);
+    }
+    
+    // Add image paths from metadata
+    const imagePaths = (source.metadata as { image_paths?: string[] })?.image_paths;
+    if (imagePaths) {
+      filesToDelete.push(...imagePaths);
+    }
+    
+    // Delete all files from storage
+    if (filesToDelete.length > 0) {
+      await supabase.storage.from("sources").remove(filesToDelete);
     }
 
     // Delete from database (cascades to chunks)
@@ -84,7 +137,6 @@ export function SourceList({ sources, onSourceRemoved }: SourceListProps) {
   return (
     <div className="space-y-2">
       {sources.map((source) => {
-        const TypeIcon = TYPE_ICONS[source.type] || FileText;
         const status = STATUS_CONFIG[source.status];
         const StatusIcon = status.icon;
 
@@ -93,16 +145,20 @@ export function SourceList({ sources, onSourceRemoved }: SourceListProps) {
             key={source.id}
             className="flex items-center gap-3 rounded-lg border p-3 transition-colors hover:bg-accent/50"
           >
-            <div className="rounded-md bg-muted p-2">
-              <TypeIcon className="h-4 w-4 text-muted-foreground" />
-            </div>
+            <SourceThumbnail source={source} />
 
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate">{source.title}</p>
               {source.original_url && (
-                <p className="text-xs text-muted-foreground truncate">
-                  {source.original_url}
-                </p>
+                <a
+                  href={source.original_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-muted-foreground hover:text-primary truncate flex items-center gap-1 group"
+                >
+                  <span className="truncate">{new URL(source.original_url).hostname}</span>
+                  <ExternalLink className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                </a>
               )}
             </div>
 

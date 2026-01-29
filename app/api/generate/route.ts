@@ -82,13 +82,26 @@ export async function POST(request: Request) {
     console.error("RAG retrieval failed:", error);
   }
 
-  // Fetch recent chat messages for additional context
-  const { data: messages } = await supabase
-    .from("messages")
-    .select("role, content")
+  // Fetch recent chat messages for additional context (from newest chat session)
+  const { data: latestSession } = await supabase
+    .from("chat_sessions")
+    .select("id")
     .eq("project_id", projectId)
-    .order("created_at", { ascending: false })
-    .limit(20);
+    .eq("user_id", user.id)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .single();
+
+  let messages: { role: string; content: string }[] | null = null;
+  if (latestSession?.id) {
+    const { data } = await supabase
+      .from("chat_messages")
+      .select("role, content")
+      .eq("chat_session_id", latestSession.id)
+      .order("created_at", { ascending: false })
+      .limit(20);
+    messages = data;
+  }
 
   const chatContext = messages?.length
     ? `\n\n--- RECENT CHAT CONTEXT ---\n${messages

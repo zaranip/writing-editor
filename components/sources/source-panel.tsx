@@ -1,20 +1,41 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { FileDropzone } from "./file-dropzone";
 import { UrlInput } from "./url-input";
 import { SourceList } from "./source-list";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Upload, Link as LinkIcon, Youtube, ImageIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Upload, Link as LinkIcon, Youtube, ImageIcon, RefreshCw } from "lucide-react";
 import type { Source } from "@/types";
 
 interface SourcePanelProps {
   projectId: string;
   sources: Source[];
+  onRefresh?: () => void;
 }
 
-export function SourcePanel({ projectId, sources: initialSources }: SourcePanelProps) {
+export function SourcePanel({ projectId, sources: initialSources, onRefresh }: SourcePanelProps) {
   const [sources, setSources] = useState<Source[]>(initialSources);
+
+  // Sync internal state when parent updates sources (e.g., after AI adds a source)
+  useEffect(() => {
+    setSources(initialSources);
+  }, [initialSources]);
+
+  // Poll for status updates when there are pending/processing sources
+  useEffect(() => {
+    const pendingSources = sources.filter(
+      (s) => s.status === "pending" || s.status === "processing"
+    );
+    if (pendingSources.length === 0 || !onRefresh) return;
+
+    const interval = setInterval(() => {
+      onRefresh();
+    }, 3000); // Poll every 3 seconds
+
+    return () => clearInterval(interval);
+  }, [sources, onRefresh]);
 
   function handleSourceAdded(source: Source) {
     setSources((prev) => [source, ...prev]);
@@ -86,9 +107,22 @@ export function SourcePanel({ projectId, sources: initialSources }: SourcePanelP
       </Tabs>
 
       <div>
-        <h3 className="text-sm font-medium mb-3">
-          Sources ({sources.length})
-        </h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-medium">
+            Sources ({sources.length})
+          </h3>
+          {onRefresh && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onRefresh}
+              className="h-7 gap-1.5 text-xs text-muted-foreground"
+            >
+              <RefreshCw className="h-3 w-3" />
+              Refresh
+            </Button>
+          )}
+        </div>
         <SourceList
           sources={sources}
           onSourceRemoved={handleSourceRemoved}

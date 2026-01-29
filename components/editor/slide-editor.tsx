@@ -1,6 +1,11 @@
 "use client";
 
 import { useState, useCallback } from "react";
+
+// Safe ID generator that works in all environments (SSR, client, older browsers)
+function generateId(): string {
+  return Math.random().toString(36).slice(2, 11) + Date.now().toString(36);
+}
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -36,7 +41,7 @@ interface SlideEditorProps {
 }
 
 function parseHtmlToSlides(html: string): Slide[] {
-  if (!html) return [{ id: crypto.randomUUID(), title: "Title Slide", content: "" }];
+  if (!html) return [{ id: generateId(), title: "Title Slide", content: "" }];
 
   const slides: Slide[] = [];
   const sectionPattern = /<section[^>]*>([\s\S]*?)<\/section>/gi;
@@ -56,7 +61,7 @@ function parseHtmlToSlides(html: string): Slide[] {
       .replace(/\s+/g, " ")
       .trim();
 
-    slides.push({ id: crypto.randomUUID(), title, content });
+    slides.push({ id: generateId(), title, content });
   }
 
   if (slides.length === 0) {
@@ -66,7 +71,7 @@ function parseHtmlToSlides(html: string): Slide[] {
       for (let i = 1; i < parts.length; i++) {
         const [title, ...rest] = parts[i].split(/<\/h2>/i);
         slides.push({
-          id: crypto.randomUUID(),
+          id: generateId(),
           title: title.replace(/<[^>]+>/g, "").trim(),
           content: rest
             .join("")
@@ -77,7 +82,7 @@ function parseHtmlToSlides(html: string): Slide[] {
       }
     } else {
       slides.push({
-        id: crypto.randomUUID(),
+        id: generateId(),
         title: "Title Slide",
         content: html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
       });
@@ -124,7 +129,7 @@ export function SlideEditor({
 
   const addSlide = () => {
     const newSlide: Slide = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       title: "New Slide",
       content: "",
     };
