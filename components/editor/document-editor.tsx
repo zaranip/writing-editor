@@ -9,6 +9,7 @@ import Placeholder from "@tiptap/extension-placeholder";
 import { EditorToolbar } from "./editor-toolbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { useState, useCallback, useEffect } from "react";
 import { Save, FileDown, Loader2, Sparkles } from "lucide-react";
 import {
@@ -17,6 +18,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface DocumentEditorProps {
   projectId: string;
@@ -24,6 +33,7 @@ interface DocumentEditorProps {
   initialTitle?: string;
   initialContent?: string;
   onSave?: (id: string, title: string, content: string) => void;
+  defaultPrompt?: string;  // Pre-filled prompt from chat context
 }
 
 export function DocumentEditor({
@@ -32,6 +42,7 @@ export function DocumentEditor({
   initialTitle = "Untitled Document",
   initialContent = "",
   onSave,
+  defaultPrompt,
 }: DocumentEditorProps) {
   const [title, setTitle] = useState(initialTitle);
   const [docId, setDocId] = useState(documentId);
@@ -39,6 +50,8 @@ export function DocumentEditor({
   const [generating, setGenerating] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [showGenerateDialog, setShowGenerateDialog] = useState(false);
+  const [generatePrompt, setGeneratePrompt] = useState("");
 
   const editor = useEditor({
     immediatelyRender: false, // Prevent SSR hydration mismatch
@@ -104,8 +117,19 @@ export function DocumentEditor({
     }
   }, [editor, docId, projectId, title, onSave]);
 
+  const openGenerateDialog = useCallback(() => {
+    // Use chat context as default prompt, or fall back to generic suggestion
+    if (defaultPrompt) {
+      setGeneratePrompt(`Using the sources, create a comprehensive document: ${defaultPrompt}`);
+    } else {
+      setGeneratePrompt("Using the source information, create a comprehensive document about ");
+    }
+    setShowGenerateDialog(true);
+  }, [defaultPrompt]);
+
   const handleGenerate = useCallback(async () => {
     if (!editor) return;
+    setShowGenerateDialog(false);
     setGenerating(true);
 
     try {
@@ -116,6 +140,7 @@ export function DocumentEditor({
           projectId,
           type: "document",
           title,
+          prompt: generatePrompt,
         }),
       });
 
@@ -125,12 +150,16 @@ export function DocumentEditor({
       if (data.html) {
         editor.commands.setContent(data.html);
       }
+      // Update title if returned from API
+      if (data.title && data.title !== "Research Document") {
+        setTitle(data.title);
+      }
     } catch (error) {
       console.error("Generate error:", error);
     } finally {
       setGenerating(false);
     }
-  }, [editor, projectId, title]);
+  }, [editor, projectId, title, generatePrompt]);
 
   const handleExport = useCallback(
     async (format: "pdf" | "docx") => {
@@ -187,7 +216,7 @@ export function DocumentEditor({
           <Button
             size="sm"
             variant="outline"
-            onClick={handleGenerate}
+            onClick={openGenerateDialog}
             disabled={generating}
             title="Generate document from research"
           >
@@ -241,6 +270,33 @@ export function DocumentEditor({
       <div className="flex-1 overflow-y-auto">
         <EditorContent editor={editor} />
       </div>
+
+      {/* Generate Dialog */}
+      <Dialog open={showGenerateDialog} onOpenChange={setShowGenerateDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Generate Document</DialogTitle>
+            <DialogDescription>
+              Describe what you want to create. Your sources will be used to generate the content.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={generatePrompt}
+            onChange={(e) => setGeneratePrompt(e.target.value)}
+            placeholder="e.g., Create a 7-day Prague itinerary with daily activities and restaurant recommendations"
+            className="min-h-[100px]"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowGenerateDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleGenerate} disabled={!generatePrompt.trim()}>
+              <Sparkles className="h-4 w-4 mr-1" />
+              Generate
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

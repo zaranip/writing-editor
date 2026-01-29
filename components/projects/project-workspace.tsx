@@ -16,10 +16,15 @@ import {
   Upload,
   History,
   Trash2,
+  Pencil,
+  Check,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { createClient } from "@/lib/supabase/client";
+import { updateProjectDescription } from "@/lib/actions/projects";
 import type { Project, Source } from "@/types";
 import type { UIMessage } from "ai";
 
@@ -76,6 +81,59 @@ export function ProjectWorkspace({
   const [activeChatId, setActiveChatId] = useState<string | undefined>();
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [showHistory, setShowHistory] = useState(false);
+
+  // Project description state
+  const [description, setDescription] = useState(project.description || "");
+  const [editingDescription, setEditingDescription] = useState(false);
+  const [descriptionInput, setDescriptionInput] = useState(project.description || "");
+
+  const handleSaveDescription = async () => {
+    await updateProjectDescription(project.id, descriptionInput);
+    setDescription(descriptionInput);
+    setEditingDescription(false);
+  };
+
+  const handleCancelDescription = () => {
+    setDescriptionInput(description);
+    setEditingDescription(false);
+  };
+
+  // Generate default description from chat messages if none exists
+  const getDefaultDescription = useCallback(() => {
+    if (description) return null; // Already has a description
+    
+    // Get user message topics
+    const userMessages = chatMessages
+      .filter(m => m.role === "user")
+      .map(m => m.parts?.filter((p): p is { type: "text"; text: string } => p.type === "text")
+        .map(p => p.text).join(" ") || "")
+      .filter(t => t.length > 0);
+    
+    if (userMessages.length === 0) return null;
+    
+    // Clean up the first user message to extract the actual topic
+    let topic = userMessages[0]
+      // Remove request prefixes
+      .replace(/^(please\s+)?(can you\s+)?(create|make|write|generate|give|build|design)\s+(me\s+)?(a\s+)?/i, "")
+      .replace(/^(i\s+)?(want|need|would like)\s+(a\s+)?/i, "")
+      // Clean up trailing words
+      .replace(/\s+(please|thanks|thank you)\.?$/i, "")
+      .trim();
+    
+    // Capitalize first letter
+    if (topic.length > 0) {
+      topic = topic.charAt(0).toUpperCase() + topic.slice(1);
+    }
+    
+    // Truncate if too long
+    if (topic.length > 60) {
+      topic = topic.slice(0, 57) + "...";
+    }
+    
+    return topic || null;
+  }, [description, chatMessages]);
+
+  const displayDescription = description || getDefaultDescription();
   const [loadingSessions, setLoadingSessions] = useState(true);
 
   // Fetch chat sessions on mount
@@ -175,10 +233,40 @@ export function ProjectWorkspace({
     <div className="flex h-[calc(100vh-8rem)] flex-col">
       {/* Project header */}
       <div className="mb-3 flex items-center justify-between">
-        <div>
+        <div className="flex-1 min-w-0">
           <h1 className="text-2xl font-bold">{project.title}</h1>
-          {project.description && (
-            <p className="text-muted-foreground text-sm">{project.description}</p>
+          
+          {/* Editable description */}
+          {editingDescription ? (
+            <div className="flex items-center gap-2 mt-1">
+              <Input
+                value={descriptionInput}
+                onChange={(e) => setDescriptionInput(e.target.value)}
+                placeholder="Add a project description..."
+                className="h-7 text-sm max-w-md"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSaveDescription();
+                  if (e.key === "Escape") handleCancelDescription();
+                }}
+              />
+              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={handleSaveDescription}>
+                <Check className="h-4 w-4 text-green-600" />
+              </Button>
+              <Button size="icon" variant="ghost" className="h-7 w-7" onClick={handleCancelDescription}>
+                <X className="h-4 w-4 text-muted-foreground" />
+              </Button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setEditingDescription(true)}
+              className="group flex items-center gap-1.5 mt-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <span className={displayDescription ? "" : "italic"}>
+                {displayDescription || "Add description..."}
+              </span>
+              <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-100 transition-opacity" />
+            </button>
           )}
         </div>
       </div>
@@ -207,7 +295,18 @@ export function ProjectWorkspace({
               </TabsContent>
 
               <TabsContent value="documents" className="flex-1 overflow-hidden p-4 mt-0">
-                <DocumentsPanel projectId={project.id} />
+                <DocumentsPanel 
+                  projectId={project.id} 
+                  lastChatPrompt={
+                    // Extract last user message text for generate dialog
+                    chatMessages
+                      .filter(m => m.role === "user")
+                      .slice(-1)[0]?.parts
+                      ?.filter((p): p is { type: "text"; text: string } => p.type === "text")
+                      .map(p => p.text)
+                      .join(" ")
+                  }
+                />
               </TabsContent>
             </Tabs>
           </div>

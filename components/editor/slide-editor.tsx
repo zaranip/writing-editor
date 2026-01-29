@@ -25,11 +25,21 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 interface Slide {
   id: string;
   title: string;
   content: string;
+  bullets: string[];  // Parsed bullet points for display
+  imageUrl?: string;  // Optional image for the slide
 }
 
 interface SlideEditorProps {
@@ -38,10 +48,38 @@ interface SlideEditorProps {
   initialTitle?: string;
   initialContent?: string;
   onSave?: (id: string, title: string, content: string) => void;
+  defaultPrompt?: string;  // Pre-filled prompt from chat context
+}
+
+function extractBullets(html: string): string[] {
+  const bullets: string[] = [];
+  const liPattern = /<li[^>]*>([\s\S]*?)<\/li>/gi;
+  let match;
+  while ((match = liPattern.exec(html)) !== null) {
+    const text = match[1].replace(/<[^>]+>/g, "").trim();
+    if (text) bullets.push(text);
+  }
+  return bullets;
+}
+
+function extractImageUrl(html: string): string | undefined {
+  // Try to find img tag with src attribute
+  const imgMatch = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+  if (imgMatch) {
+    console.log("[SlideParser] Found image URL:", imgMatch[1]);
+    return imgMatch[1];
+  }
+  // Also check for src without quotes (malformed HTML)
+  const imgMatchNoQuotes = html.match(/<img[^>]+src=([^\s>]+)/i);
+  if (imgMatchNoQuotes) {
+    console.log("[SlideParser] Found image URL (no quotes):", imgMatchNoQuotes[1]);
+    return imgMatchNoQuotes[1];
+  }
+  return undefined;
 }
 
 function parseHtmlToSlides(html: string): Slide[] {
-  if (!html) return [{ id: generateId(), title: "Title Slide", content: "" }];
+  if (!html) return [{ id: generateId(), title: "Title Slide", content: "", bullets: [] }];
 
   const slides: Slide[] = [];
   const sectionPattern = /<section[^>]*>([\s\S]*?)<\/section>/gi;
@@ -54,14 +92,23 @@ function parseHtmlToSlides(html: string): Slide[] {
       ? titleMatch[1].replace(/<[^>]+>/g, "").trim()
       : "Untitled Slide";
 
-    // Get content excluding the title tag
+    // Extract bullet points from <ul>/<ol> lists
+    const bullets = extractBullets(inner);
+    
+    // Extract image URL if present
+    const imageUrl = extractImageUrl(inner);
+
+    // Get content excluding the title tag, lists, and images
     const content = inner
       .replace(/<h[12][^>]*>[\s\S]*?<\/h[12]>/i, "")
+      .replace(/<ul[^>]*>[\s\S]*?<\/ul>/gi, "")
+      .replace(/<ol[^>]*>[\s\S]*?<\/ol>/gi, "")
+      .replace(/<img[^>]*>/gi, "")
       .replace(/<[^>]+>/g, " ")
       .replace(/\s+/g, " ")
       .trim();
 
-    slides.push({ id: generateId(), title, content });
+    slides.push({ id: generateId(), title, content, bullets, imageUrl });
   }
 
   if (slides.length === 0) {
@@ -70,14 +117,21 @@ function parseHtmlToSlides(html: string): Slide[] {
     if (parts.length > 1) {
       for (let i = 1; i < parts.length; i++) {
         const [title, ...rest] = parts[i].split(/<\/h2>/i);
+        const restHtml = rest.join("");
+        const bullets = extractBullets(restHtml);
+        const imageUrl = extractImageUrl(restHtml);
         slides.push({
           id: generateId(),
           title: title.replace(/<[^>]+>/g, "").trim(),
-          content: rest
-            .join("")
+          content: restHtml
+            .replace(/<ul[^>]*>[\s\S]*?<\/ul>/gi, "")
+            .replace(/<ol[^>]*>[\s\S]*?<\/ol>/gi, "")
+            .replace(/<img[^>]*>/gi, "")
             .replace(/<[^>]+>/g, " ")
             .replace(/\s+/g, " ")
             .trim(),
+          bullets,
+          imageUrl,
         });
       }
     } else {
@@ -85,6 +139,7 @@ function parseHtmlToSlides(html: string): Slide[] {
         id: generateId(),
         title: "Title Slide",
         content: html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
+        bullets: [],
       });
     }
   }
@@ -94,10 +149,26 @@ function parseHtmlToSlides(html: string): Slide[] {
 
 function slidesToHtml(slides: Slide[]): string {
   return slides
-    .map(
-      (s) =>
-        `<section>\n  <h1>${s.title}</h1>\n  <p>${s.content}</p>\n</section>`
-    )
+    .map((s) => {
+      const parts: string[] = [`  <h1>${s.title}</h1>`];
+      
+      // Add bullet points if present
+      if (s.bullets.length > 0) {
+        parts.push(`  <ul>\n${s.bullets.map(b => `    <li>${b}</li>`).join("\n")}\n  </ul>`);
+      }
+      
+      // Add content if present
+      if (s.content.trim()) {
+        parts.push(`  <p>${s.content}</p>`);
+      }
+      
+      // Add image if present
+      if (s.imageUrl) {
+        parts.push(`  <img src="${s.imageUrl}" alt="Slide image" style="max-width:100%;height:auto;">`);
+      }
+      
+      return `<section>\n${parts.join("\n")}\n</section>`;
+    })
     .join("\n");
 }
 
@@ -107,6 +178,7 @@ export function SlideEditor({
   initialTitle = "Untitled Presentation",
   initialContent = "",
   onSave,
+  defaultPrompt,
 }: SlideEditorProps) {
   const [title, setTitle] = useState(initialTitle);
   const [docId, setDocId] = useState(documentId);
@@ -118,6 +190,8 @@ export function SlideEditor({
   const [generating, setGenerating] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
+  const [showGenerateDialog, setShowGenerateDialog] = useState(false);
+  const [generatePrompt, setGeneratePrompt] = useState("");
 
   const activeSlide = slides[activeSlideIndex] || slides[0];
 
@@ -132,6 +206,7 @@ export function SlideEditor({
       id: generateId(),
       title: "New Slide",
       content: "",
+      bullets: [],
     };
     setSlides((prev) => [
       ...prev.slice(0, activeSlideIndex + 1),
@@ -191,7 +266,18 @@ export function SlideEditor({
     }
   }, [slides, docId, projectId, title, onSave]);
 
+  const openGenerateDialog = useCallback(() => {
+    // Use chat context as default prompt, or fall back to generic suggestion
+    if (defaultPrompt) {
+      setGeneratePrompt(`Using the sources, create a presentation: ${defaultPrompt}`);
+    } else {
+      setGeneratePrompt("Using the source information, create a presentation about ");
+    }
+    setShowGenerateDialog(true);
+  }, [defaultPrompt]);
+
   const handleGenerate = useCallback(async () => {
+    setShowGenerateDialog(false);
     setGenerating(true);
     try {
       const response = await fetch("/api/generate", {
@@ -201,6 +287,7 @@ export function SlideEditor({
           projectId,
           type: "slides",
           title,
+          prompt: generatePrompt,
         }),
       });
 
@@ -208,16 +295,23 @@ export function SlideEditor({
 
       const data = await response.json();
       if (data.html) {
+        console.log("[SlideEditor] Received HTML:", data.html.substring(0, 500));
+        console.log("[SlideEditor] HTML contains <img>:", data.html.includes("<img"));
         const parsed = parseHtmlToSlides(data.html);
+        console.log("[SlideEditor] Parsed slides:", parsed.map(s => ({ title: s.title, hasImage: !!s.imageUrl, imageUrl: s.imageUrl })));
         setSlides(parsed);
         setActiveSlideIndex(0);
+      }
+      // Update title if returned from API
+      if (data.title && data.title !== "Research Document") {
+        setTitle(data.title);
       }
     } catch (error) {
       console.error("Generate error:", error);
     } finally {
       setGenerating(false);
     }
-  }, [projectId, title]);
+  }, [projectId, title, generatePrompt]);
 
   const handleExport = useCallback(async () => {
     setExporting(true);
@@ -266,7 +360,7 @@ export function SlideEditor({
           <Button
             size="sm"
             variant="outline"
-            onClick={handleGenerate}
+            onClick={openGenerateDialog}
             disabled={generating}
           >
             {generating ? (
@@ -379,24 +473,59 @@ export function SlideEditor({
           {activeSlide && (
             <div className="max-w-2xl mx-auto space-y-4">
               {/* Slide preview card */}
-              <div className="aspect-video rounded-lg border bg-white dark:bg-zinc-900 shadow-sm p-8 flex flex-col">
+              <div className="aspect-video rounded-lg border bg-white dark:bg-zinc-900 shadow-sm p-6 flex flex-col overflow-hidden">
                 <Input
                   value={activeSlide.title}
                   onChange={(e) =>
                     updateSlide(activeSlideIndex, "title", e.target.value)
                   }
-                  className="text-2xl font-bold border-none bg-transparent shadow-none focus-visible:ring-0 p-0 h-auto"
+                  className="text-2xl font-bold border-none bg-transparent shadow-none focus-visible:ring-0 p-0 h-auto shrink-0"
                   placeholder="Slide title..."
                 />
-                <Textarea
-                  value={activeSlide.content}
-                  onChange={(e) =>
-                    updateSlide(activeSlideIndex, "content", e.target.value)
-                  }
-                  className="flex-1 mt-4 border-none bg-transparent shadow-none focus-visible:ring-0 resize-none p-0 text-sm"
-                  placeholder="Slide content... Use each line for a bullet point."
-                />
+                
+                <div className="flex-1 mt-4 flex gap-4 min-h-0">
+                  {/* Content side */}
+                  <div className="flex-1 flex flex-col min-w-0">
+                    {/* Bullet points (read-only display from AI) */}
+                    {activeSlide.bullets.length > 0 && (
+                      <ul className="space-y-1 mb-3 text-sm">
+                        {activeSlide.bullets.map((bullet, i) => (
+                          <li key={i} className="flex items-start gap-2">
+                            <span className="text-primary mt-1">•</span>
+                            <span>{bullet}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    
+                    {/* Editable content */}
+                    <Textarea
+                      value={activeSlide.content}
+                      onChange={(e) =>
+                        updateSlide(activeSlideIndex, "content", e.target.value)
+                      }
+                      className="flex-1 border-none bg-transparent shadow-none focus-visible:ring-0 resize-none p-0 text-sm"
+                      placeholder={activeSlide.bullets.length > 0 ? "Additional notes..." : "Slide content... Use each line for a bullet point."}
+                    />
+                  </div>
+                  
+                  {/* Image side */}
+                  {activeSlide.imageUrl && (
+                    <div className="w-1/3 shrink-0 flex items-center">
+                      <img
+                        src={activeSlide.imageUrl}
+                        alt="Slide image"
+                        className="w-full h-auto max-h-full object-contain rounded"
+                        onError={(e) => {
+                          // Hide broken images
+                          (e.target as HTMLImageElement).style.display = 'none';
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
+              
               <p className="text-xs text-muted-foreground text-center">
                 Slide {activeSlideIndex + 1} of {slides.length}
               </p>
@@ -404,6 +533,33 @@ export function SlideEditor({
           )}
         </div>
       </div>
+
+      {/* Generate Dialog */}
+      <Dialog open={showGenerateDialog} onOpenChange={setShowGenerateDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Generate Presentation</DialogTitle>
+            <DialogDescription>
+              Describe what you want to create. Your sources and their images will be used.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={generatePrompt}
+            onChange={(e) => setGeneratePrompt(e.target.value)}
+            placeholder="e.g., Create a 7-day Prague itinerary with daily activities and photos"
+            className="min-h-[100px]"
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowGenerateDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleGenerate} disabled={!generatePrompt.trim()}>
+              <Sparkles className="h-4 w-4 mr-1" />
+              Generate
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

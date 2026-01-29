@@ -20,7 +20,17 @@ When using web research:
 3. Use "addToSources" to save useful web pages to the user's project sources — do this when you find particularly relevant or high-quality sources that would be valuable for ongoing research. Always tell the user when you add a source.
 4. After searching, synthesize the information and present your findings clearly, citing the URLs you used.
 
-Do NOT search the web unless it would be genuinely helpful. For questions clearly answerable from uploaded sources, use those first.`;
+Do NOT search the web unless it would be genuinely helpful. For questions clearly answerable from uploaded sources, use those first.
+
+**CRITICAL - ALWAYS PROVIDE A COMPLETE RESPONSE:**
+After using any tools (webSearch, readWebPage, addToSources), you MUST provide a substantive, helpful response that addresses the user's original request. Do NOT just describe what you searched or added — actually deliver the content they asked for.
+
+For example:
+- If user asks for "a 7 day itinerary in Prague" → After researching, provide the full day-by-day itinerary with specific recommendations, times, and tips.
+- If user asks for "a summary of X topic" → After gathering sources, write the actual summary.
+- If user asks to "explain how Y works" → After research, provide the full explanation.
+
+The tools are means to an end. The user expects the actual deliverable, not just a report of your research process.`;
 
 export function buildContextPrompt(context: string): string {
   return `${RESEARCH_CHAT_SYSTEM_PROMPT}

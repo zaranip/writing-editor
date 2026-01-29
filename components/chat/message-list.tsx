@@ -47,7 +47,7 @@ function SourcesUsedDisplay({ sources }: { sources: { id: string; title: string 
 interface ToolPart {
   type: string;
   toolName?: string; // Present on dynamic-tool
-  input: Record<string, unknown>;
+  input?: Record<string, unknown>; // May be undefined during early streaming
   state: string;
   output?: unknown;
 }
@@ -99,6 +99,7 @@ function ToolPartView({ part }: { part: ToolPart }) {
   const { input, state, output } = part;
 
   if (toolName === "webSearch") {
+    const query = input?.query;
     return (
       <div className="my-2 rounded-lg border bg-muted/50 p-3 text-sm">
         <div className="flex items-center gap-2 text-muted-foreground">
@@ -108,15 +109,18 @@ function ToolPartView({ part }: { part: ToolPart }) {
           </span>
           {!isOutputReady(state) && <Loader2 className="h-3 w-3 animate-spin" />}
         </div>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Query: &quot;{String(input.query)}&quot;
-        </p>
+        {query != null && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Query: &quot;{String(query)}&quot;
+          </p>
+        )}
         {isOutputReady(state) && <SearchResultsList result={output} />}
       </div>
     );
   }
 
   if (toolName === "readWebPage") {
+    const url = input?.url;
     return (
       <div className="my-2 rounded-lg border bg-muted/50 p-3 text-sm">
         <div className="flex items-center gap-2 text-muted-foreground">
@@ -126,14 +130,17 @@ function ToolPartView({ part }: { part: ToolPart }) {
           </span>
           {!isOutputReady(state) && <Loader2 className="h-3 w-3 animate-spin" />}
         </div>
-        <p className="mt-1 text-xs text-muted-foreground truncate">
-          {String(input.url)}
-        </p>
+        {url != null && (
+          <p className="mt-1 text-xs text-muted-foreground truncate">
+            {String(url)}
+          </p>
+        )}
       </div>
     );
   }
 
   if (toolName === "addToSources") {
+    const title = input?.title;
     const addResult = output as { success?: boolean; message?: string } | undefined;
     return (
       <div className="my-2 rounded-lg border bg-muted/50 p-3 text-sm">
@@ -148,9 +155,11 @@ function ToolPartView({ part }: { part: ToolPart }) {
           </span>
           {!isOutputReady(state) && <Loader2 className="h-3 w-3 animate-spin" />}
         </div>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {String(input.title)}
-        </p>
+        {title != null && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            {String(title)}
+          </p>
+        )}
         {isOutputReady(state) && addResult?.message && (
           <p className="mt-1 text-xs text-muted-foreground">{addResult.message}</p>
         )}

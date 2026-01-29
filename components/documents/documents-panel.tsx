@@ -32,9 +32,10 @@ import type { Document } from "@/types";
 
 interface DocumentsPanelProps {
   projectId: string;
+  lastChatPrompt?: string;  // Last user message from chat for generate dialog
 }
 
-export function DocumentsPanel({ projectId }: DocumentsPanelProps) {
+export function DocumentsPanel({ projectId, lastChatPrompt }: DocumentsPanelProps) {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeDoc, setActiveDoc] = useState<Document | null>(null);
@@ -128,6 +129,7 @@ export function DocumentsPanel({ projectId }: DocumentsPanelProps) {
                   : ""
               }
               onSave={handleSave}
+              defaultPrompt={lastChatPrompt}
             />
           ) : (
             <DocumentEditor
@@ -140,6 +142,7 @@ export function DocumentsPanel({ projectId }: DocumentsPanelProps) {
                   : ""
               }
               onSave={handleSave}
+              defaultPrompt={lastChatPrompt}
             />
           )}
         </div>

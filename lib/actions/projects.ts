@@ -67,3 +67,22 @@ export async function renameProject(projectId: string, title: string) {
 
   revalidatePath("/dashboard");
 }
+
+export async function updateProjectDescription(projectId: string, description: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) throw new Error("Not authenticated");
+
+  const { error } = await supabase
+    .from("projects")
+    .update({ description })
+    .eq("id", projectId)
+    .eq("user_id", user.id);
+
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/dashboard");
+}
