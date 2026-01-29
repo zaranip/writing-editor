@@ -304,6 +304,88 @@ Open [http://localhost:3000](http://localhost:3000)
 
 ---
 
+## For LLMs (Claude Code, Cursor, etc.)
+
+This section helps AI coding assistants understand the project structure.
+
+### Project Architecture
+
+```
+writing-editor/
+├── app/                      # Next.js App Router
+│   ├── api/                  # API routes
+│   │   ├── chat/            # AI chat endpoint (streaming, tools)
+│   │   ├── generate/        # Document/presentation generation
+│   │   ├── documents/       # CRUD + export (PDF, DOCX, PPTX)
+│   │   ├── chat-sessions/   # Chat history management
+│   │   └── ingest/          # Source processing (PDF, URL, YouTube)
+│   ├── auth/                # Auth callback routes
+│   ├── dashboard/           # Main app pages
+│   └── layout.tsx           # Root layout with providers
+├── components/
+│   ├── chat/                # Chat UI (message list, input, status)
+│   ├── editor/              # Document & slide editors
+│   ├── sources/             # Source management UI
+│   ├── projects/            # Project workspace & cards
+│   └── ui/                  # shadcn/ui components
+├── lib/
+│   ├── ai/                  # AI utilities (provider config, prompts, RAG)
+│   ├── supabase/            # Supabase client (server & browser)
+│   ├── actions/             # Server actions (projects CRUD)
+│   ├── search/              # Web search & scraping
+│   └── crypto.ts            # API key encryption
+└── types/                   # TypeScript types
+```
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `app/api/chat/route.ts` | Main chat endpoint with AI tools (webSearch, readWebPage, addToSources) |
+| `app/api/generate/route.ts` | Generates documents/presentations from sources |
+| `app/api/ingest/route.ts` | Processes uploaded sources (PDF parsing, URL scraping, YouTube transcripts) |
+| `lib/ai/prompts.ts` | System prompts for the research assistant |
+| `lib/ai/provider.ts` | Multi-provider AI configuration (OpenAI, Anthropic, Google) |
+| `lib/search/web-search.ts` | Web search (via DuckDuckGo) and URL scraping (via Cheerio) |
+| `components/chat/chat-interface.tsx` | Main chat UI component |
+| `components/editor/document-editor.tsx` | TipTap-based document editor |
+| `components/editor/slide-editor.tsx` | Presentation editor with image support |
+| `components/projects/project-workspace.tsx` | Main workspace layout (sources, docs, chat) |
+
+### Data Flow
+
+1. **Sources** → Uploaded/scraped → Stored in Supabase Storage (files) + DB (metadata)
+2. **Chat** → User message → RAG retrieval → AI response with tool calls → Saved to DB
+3. **Generation** → Fetch sources → Read .txt files from storage → AI generates HTML → Returned to editor
+
+### Database Schema
+
+- `projects` — User projects (title, description)
+- `sources` — Research sources (type, content, file_path, metadata with image_paths)
+- `documents` — Generated docs/slides (content as JSON with HTML)
+- `chat_sessions` — Chat threads per project
+- `chat_messages` — Individual messages (role, content, metadata with parts)
+- `api_keys` — Encrypted user API keys per provider
+
+### AI Tools (in chat)
+
+The chat endpoint (`app/api/chat/route.ts`) provides three tools:
+
+1. **webSearch** — Searches DuckDuckGo, returns titles/URLs/snippets
+2. **readWebPage** — Scrapes a URL, returns title + text content
+3. **addToSources** — Saves a URL as a source with images to user's project
+
+### Conventions
+
+- Server components by default, `"use client"` only when needed
+- Server actions in `lib/actions/` for mutations
+- API routes return JSON, chat route streams via AI SDK
+- All DB access goes through Supabase client with RLS
+- User API keys are encrypted with `API_KEY_ENCRYPTION_SECRET`
+- Tailwind CSS with shadcn/ui component patterns
+
+---
+
 ## Contributing
 
 Contributions are welcome! Please open an issue or submit a pull request.
