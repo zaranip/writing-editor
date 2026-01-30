@@ -13,7 +13,7 @@ export interface Profile {
 export interface ApiKey {
   id: string;
   user_id: string;
-  provider: "openai" | "anthropic" | "google";
+  provider: "openai" | "anthropic" | "google" | "openrouter";
   encrypted_key: string;
   created_at: string;
   updated_at: string;
@@ -100,7 +100,7 @@ export interface ChatMessage {
 // LLM Provider types
 // ============================================================
 
-export type LLMProvider = "openai" | "anthropic" | "google";
+export type LLMProvider = "openai" | "anthropic" | "google" | "openrouter";
 
 export interface ModelOption {
   provider: LLMProvider;
@@ -109,6 +109,14 @@ export interface ModelOption {
 }
 
 export const MODEL_OPTIONS: ModelOption[] = [
+  // OpenRouter models (access all providers with one key)
+  { provider: "openrouter", model: "anthropic/claude-sonnet-4", label: "Claude Sonnet 4 (via OpenRouter)" },
+  { provider: "openrouter", model: "openai/gpt-4o", label: "GPT-4o (via OpenRouter)" },
+  { provider: "openrouter", model: "google/gemini-2.0-flash-001", label: "Gemini 2.0 Flash (via OpenRouter)" },
+  { provider: "openrouter", model: "anthropic/claude-3.5-haiku", label: "Claude 3.5 Haiku (via OpenRouter)" },
+  { provider: "openrouter", model: "openai/gpt-4o-mini", label: "GPT-4o Mini (via OpenRouter)" },
+  { provider: "openrouter", model: "deepseek/deepseek-r1", label: "DeepSeek R1 (via OpenRouter)" },
+  // Direct provider models
   { provider: "openai", model: "gpt-4o", label: "GPT-4o" },
   { provider: "openai", model: "gpt-4o-mini", label: "GPT-4o Mini" },
   { provider: "anthropic", model: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },

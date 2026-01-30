@@ -145,7 +145,7 @@ CREATE TABLE chat_messages (
 CREATE TABLE api_keys (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
-  provider TEXT NOT NULL CHECK (provider IN ('openai', 'anthropic', 'google')),
+  provider TEXT NOT NULL CHECK (provider IN ('openai', 'anthropic', 'google', 'openrouter')),
   encrypted_key TEXT NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(user_id, provider)
@@ -191,6 +191,18 @@ CREATE POLICY "Users can update source files" ON storage.objects
 
 CREATE POLICY "Users can delete source files" ON storage.objects 
   FOR DELETE USING (bucket_id = 'sources' AND auth.role() = 'authenticated');
+```
+
+</details>
+
+<details>
+<summary><strong>Migration 3: Add OpenRouter support (optional, for existing installs)</strong></summary>
+
+```sql
+-- Add OpenRouter as a supported provider
+ALTER TABLE api_keys DROP CONSTRAINT IF EXISTS api_keys_provider_check;
+ALTER TABLE api_keys ADD CONSTRAINT api_keys_provider_check 
+  CHECK (provider IN ('openai', 'anthropic', 'google', 'openrouter'));
 ```
 
 </details>
@@ -246,15 +258,23 @@ After deployment, go to Supabase **Authentication → URL Configuration**:
 
 ---
 
-### Step 3: Add your AI API keys
+### Step 3: Add your AI API key
 
 1. Open your deployed app
 2. Sign in with Google (or email)
 3. Go to **Settings** (gear icon)
-4. Add at least one API key:
-   - [OpenAI API key](https://platform.openai.com/api-keys)
-   - [Anthropic API key](https://console.anthropic.com/)
-   - [Google AI API key](https://makersuite.google.com/app/apikey)
+4. Add an API key:
+
+**Recommended: OpenRouter (one key for all models)**
+- Go to [openrouter.ai/keys](https://openrouter.ai/keys)
+- Create an API key
+- Paste it in Settings → OpenRouter
+- Access GPT-4o, Claude, Gemini, DeepSeek, and 100+ models with one key
+
+**Or use individual providers:**
+- [OpenAI API key](https://platform.openai.com/api-keys) — GPT-4o, GPT-4o Mini
+- [Anthropic API key](https://console.anthropic.com/) — Claude Sonnet 4, Claude 3.5 Haiku
+- [Google AI API key](https://makersuite.google.com/app/apikey) — Gemini 2.0 Flash, Gemini 2.5 Pro
 
 You're ready to go!
 
@@ -305,6 +325,16 @@ Open [http://localhost:3000](http://localhost:3000)
 ---
 
 ## For LLMs (Claude Code, Cursor, etc.)
+
+> **If you are an LLM reading this:**
+> 1. Read this entire section before making changes
+> 2. Follow the existing patterns in the codebase — check similar files first
+> 3. Use Server Components by default; only add `"use client"` when necessary
+> 4. All database access must go through Supabase with RLS policies
+> 5. Never expose `SUPABASE_SERVICE_ROLE_KEY` or `API_KEY_ENCRYPTION_SECRET` to the client
+> 6. When adding AI features, use the Vercel AI SDK patterns in `app/api/chat/route.ts`
+> 7. UI components should use shadcn/ui from `components/ui/`
+> 8. Run `npm run build` to verify your changes compile
 
 This section helps AI coding assistants understand the project structure.
 

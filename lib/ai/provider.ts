@@ -21,6 +21,18 @@ export function getModel(provider: LLMProvider, model: string, apiKey: string) {
       const google = createGoogleGenerativeAI({ apiKey });
       return google(model);
     }
+    case "openrouter": {
+      // OpenRouter uses OpenAI-compatible API
+      const openrouter = createOpenAI({
+        apiKey,
+        baseURL: "https://openrouter.ai/api/v1",
+        headers: {
+          "HTTP-Referer": "https://writing-editor.vercel.app",
+          "X-Title": "Writing Editor",
+        },
+      });
+      return openrouter(model);
+    }
     default:
       throw new Error(`Unsupported provider: ${provider}`);
   }
